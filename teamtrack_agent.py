@@ -33,7 +33,7 @@ DELTA_CLAMP     = 120
 
 # Admin: paste your Apps Script /exec URL here BEFORE building the app, so the
 # team only enters ID + password. Leave "" to be asked once.
-EMBEDDED_SCRIPT_URL = ""
+EMBEDDED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzoMu9fdzhYELFNwWM4lIffo65wiC1osehKxwjroMqp1EAapyilOKVrZYUidkPvEzhJ1w/exec"
 
 HOME        = os.path.expanduser("~")
 CONFIG_PATH = os.path.join(HOME, ".teamtrack_agent.json")
