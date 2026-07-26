@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teamtrack</title>
+<link rel="icon" type="image/svg+xml" href="teamtrack-icon.svg">
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
+    --text:#e7e9ee; --muted:#9aa3b2; --accent:#4f8cff; --good:#37c26b;
+    --warn:#f0a020; --bad:#e5544b; --radius:14px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    background:var(--bg);color:var(--text);min-height:100vh}
+  .wrap{max-width:980px;margin:0 auto;padding:28px 20px}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:14px}
+  .card{background:var(--panel);border:1px solid var(--line);
+    border-radius:var(--radius);padding:22px;margin-top:18px}
+  .choice{display:flex;gap:16px;flex-wrap:wrap;margin-top:26px}
+  .choice button{flex:1;min-width:200px;padding:26px;font-size:17px;font-weight:600;
+    border-radius:var(--radius);border:1px solid var(--line);background:var(--panel2);
+    color:var(--text);cursor:pointer;transition:.15s}
+  .choice button:hover{border-color:var(--accent);transform:translateY(-2px)}
+  label{display:block;font-size:13px;color:var(--muted);margin:12px 0 5px}
+  input{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);
+    background:var(--panel2);color:var(--text);font-size:15px}
+  .btn{margin-top:16px;padding:11px 18px;border:none;border-radius:10px;
+    background:var(--accent);color:#fff;font-weight:600;font-size:15px;cursor:pointer}
+  .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--muted)}
+  .btn:hover{filter:brightness(1.08)}
+  .row{display:flex;gap:12px;align-items:center;justify-content:space-between}
+  .err{color:var(--bad);font-size:13px;margin-top:10px;min-height:16px}
+  .badge{display:inline-flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;
+    font-weight:700;font-size:15px}
+  .badge .dot{width:10px;height:10px;border-radius:50%}
+  .working{background:rgba(55,194,107,.12);color:var(--good)}
+  .working .dot{background:var(--good)}
+  .onbreak{background:rgba(240,160,32,.12);color:var(--warn)}
+  .onbreak .dot{background:var(--warn)}
+  .offline{background:rgba(154,163,178,.12);color:var(--muted)}
+  .offline .dot{background:var(--muted)}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;margin-top:20px}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .stat .n{font-size:24px;font-weight:700}
+  .stat .l{font-size:12px;color:var(--muted);margin-top:2px}
+  table{width:100%;border-collapse:collapse;margin-top:8px;font-size:14px}
+  th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+  .hide{display:none}
+  .muted{color:var(--muted)}
+  .small{font-size:12px;color:var(--muted)}
+  .toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+  details summary{cursor:pointer;color:var(--accent);font-size:13px}
+  .warnbox{background:rgba(229,84,75,.1);border:1px solid var(--bad);color:#ffd7d3;
+    padding:16px;border-radius:12px;margin-top:20px;font-size:14px;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- CONFIG WARNING -->
+  <div id="view-config" class="hide">
+    <img src="teamtrack-logo.svg" alt="Teamtrack" style="height:52px">
+    <div class="warnbox">
+      Almost there — open <code>index.html</code> and set <code>SCRIPT_URL</code>
+      (near the top of the script) to your Google Apps Script Web app URL, then reload.
+    </div>
+  </div>
+
+  <!-- LANDING -->
+  <div id="view-landing" class="hide">
+    <img src="teamtrack-logo.svg" alt="Teamtrack" style="height:52px">
+    <div class="sub" style="margin-top:8px">Sign in to start tracking, or manage your team.</div>
+    <div class="choice">
+      <button onclick="showLogin('member')">👥 Team Member<br><span class="small">Log in &amp; start working</span></button>
+      <button onclick="showOwner()">🛠️ Owner / Admin<br><span class="small">Manage team &amp; view reports</span></button>
+    </div>
+  </div>
+
+  <!-- LOGIN -->
+  <div id="view-login" class="hide">
+    <div class="card" style="max-width:420px;margin:40px auto">
+      <h1 id="login-title">Team Login</h1>
+      <div class="sub">Enter your person ID and password.</div>
+      <label>Person ID</label>
+      <input id="login-user" autocomplete="username">
+      <label>Password</label>
+      <input id="login-pass" type="password" autocomplete="current-password">
+      <div class="err" id="login-err"></div>
+      <div class="row">
+        <button class="btn" onclick="doLogin()">Log in</button>
+        <button class="btn ghost" onclick="go('landing')">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- OWNER REGISTER -->
+  <div id="view-register" class="hide">
+    <div class="card" style="max-width:420px;margin:40px auto">
+      <h1>Create Owner Account</h1>
+      <div class="sub">No owner exists yet. Create the first admin account.</div>
+      <label>Owner username</label>
+      <input id="reg-user">
+      <label>Password</label>
+      <input id="reg-pass" type="password">
+      <div class="err" id="reg-err"></div>
+      <div class="row">
+        <button class="btn" onclick="doRegister()">Create owner</button>
+        <button class="btn ghost" onclick="go('landing')">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MEMBER -->
+  <div id="view-member" class="hide">
+    <div class="toolbar">
+      <div><h1>Hi, <span id="m-name"></span></h1><div class="sub">You're being tracked while this tab is open.</div></div>
+      <button class="btn ghost" onclick="doLogout()">Log out</button>
+    </div>
+    <div class="card">
+      <span id="m-badge" class="badge offline"><span class="dot"></span><span id="m-status">Connecting…</span></span>
+      <div class="stats">
+        <div class="stat"><div class="n" id="m-work">0m</div><div class="l">Working today</div></div>
+        <div class="stat"><div class="n" id="m-break">0m</div><div class="l">Break today</div></div>
+        <div class="stat"><div class="n" id="m-breaks">0</div><div class="l">Breaks taken</div></div>
+        <div class="stat"><div class="n" id="m-login">—</div><div class="l">Logged in at</div></div>
+      </div>
+      <div class="small" style="margin-top:16px">
+        Counts typing, scrolling, clicking and mouse movement on this page.
+        After <span id="m-idle"></span> minutes with no input you're marked On Break. Saved to your Google Sheet every 30s.
+      </div>
+    </div>
+  </div>
+
+  <!-- ADMIN -->
+  <div id="view-admin" class="hide">
+    <div class="toolbar">
+      <div><h1>Owner Dashboard</h1><div class="sub">Live team activity — refreshes automatically.</div></div>
+      <button class="btn ghost" onclick="doLogout()">Log out</button>
+    </div>
+    <div class="card">
+      <h1 style="font-size:17px">Add a team member</h1>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:end">
+        <div style="flex:1;min-width:150px"><label>Person ID</label><input id="nu-user"></div>
+        <div style="flex:1;min-width:150px"><label>Password</label><input id="nu-pass"></div>
+        <div style="flex:1;min-width:150px"><label>Team (optional)</label><input id="nu-team"></div>
+        <button class="btn" onclick="createUser()">Create</button>
+      </div>
+      <div class="err" id="nu-err"></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h1 style="font-size:17px">Team status</h1><span class="small" id="a-updated"></span></div>
+      <table>
+        <thead><tr>
+          <th>Person</th><th>Team</th><th>Status</th><th>Started</th><th>Ended</th>
+          <th>Working</th><th>Break</th><th>Breaks (5min+ away)</th>
+        </tr></thead>
+        <tbody id="a-body"></tbody>
+      </table>
+      <div class="small muted" id="a-empty" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <footer style="text-align:center;color:var(--muted);font-size:12px;margin-top:36px;padding-bottom:20px">
+    Built by Chetan Saxena
+  </footer>
+
+</div>
+
+<script>
+/* ===== SET THIS to your Apps Script Web app URL (ends in /exec) ===== */
+const SCRIPT_URL = "PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE";
+
+const BREAK_THRESHOLD = 5 * 60;  // seconds away before it counts as a break (5 min)
+const SYNC_INTERVAL   = 30;      // seconds between saves to the sheet
+
+let S = null;                // member tracking state
+let tickTimer=null, syncTimer=null, adminTimer=null;
+
+/* ---- Apps Script call (text/plain avoids a CORS preflight) ---- */
+async function call(action, payload){
+  const res = await fetch(SCRIPT_URL, {
+    method:"POST",
+    body: JSON.stringify(Object.assign({action}, payload||{}))
+  });
+  return res.json();
+}
+function getToken(){ return localStorage.getItem("tt_token"); }
+function setToken(t){ localStorage.setItem("tt_token", t); }
+function clearToken(){ localStorage.removeItem("tt_token"); }
+function clearState(){ localStorage.removeItem("tt_state"); }
+function saveState(){ if(S) localStorage.setItem("tt_state", JSON.stringify(S)); }
+
+/* ---- small formatters ---- */
+function pad(n){ return (n<10?"0":"")+n; }
+function dateStr(d){ d=d||new Date(); return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()); }
+function dtStr(ts){ const d=new Date(ts); return dateStr(d)+" "+pad(d.getHours())+":"+pad(d.getMinutes())+":"+pad(d.getSeconds()); }
+function hm(ts){ const d=new Date(ts); return pad(d.getHours())+":"+pad(d.getMinutes()); }
+function timeStr(ts){ const d=new Date(ts); return pad(d.getHours())+":"+pad(d.getMinutes())+":"+pad(d.getSeconds()); }
+function fmt(sec){ sec=Math.round(sec||0); const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60);
+  if(h) return h+"h "+m+"m"; if(m) return m+"m"; return sec+"s"; }
+
+/* ---- view switching ---- */
+function go(view){
+  ["config","landing","login","register","member","admin"].forEach(v=>
+    document.getElementById("view-"+v).classList.toggle("hide", v!==view));
+}
+function showLogin(role){
+  document.getElementById("login-title").textContent = role==="admin" ? "Owner Login" : "Team Login";
+  document.getElementById("login-err").textContent="";
+  go("login");
+}
+async function showOwner(){
+  const r = await call("adminExists");
+  if(r.exists) showLogin("admin"); else go("register");
+}
+
+/* ---- auth actions ---- */
+async function doRegister(){
+  const u=document.getElementById("reg-user").value.trim();
+  const p=document.getElementById("reg-pass").value;
+  const r=await call("register",{username:u,password:p});
+  if(r.error){ document.getElementById("reg-err").textContent=r.error; return; }
+  showLogin("admin");
+}
+async function doLogin(){
+  const u=document.getElementById("login-user").value.trim();
+  const p=document.getElementById("login-pass").value;
+  const r=await call("login",{username:u,password:p});
+  if(r.error || !r.token){ document.getElementById("login-err").textContent=r.error||"login failed"; return; }
+  setToken(r.token);
+  if(r.role==="member") clearState();   // fresh session on explicit login
+  enter(r.role, r.username);
+}
+async function doLogout(){
+  stopTimers();
+  if(S){
+    const st=computeStats();
+    try{ await call("sync",{token:getToken(), date:S.date, login:timeStr(S.login),
+      out:timeStr(Date.now()), status:"offline", workingSeconds:st.workingSeconds,
+      breakSeconds:st.breakSeconds, breaks:st.breaks, lastSeen:dtStr(Date.now())}); }catch(e){}
+  }
+  clearToken(); clearState();
+  location.reload();
+}
+function stopTimers(){ [tickTimer,syncTimer,adminTimer].forEach(t=>clearInterval(t)); tickTimer=syncTimer=adminTimer=null; }
+
+/* ---- enter a dashboard ---- */
+function enter(role, name){
+  if(role==="member") startMember(name);
+  else { go("admin"); refreshReport(); adminTimer=setInterval(refreshReport, 5000); }
+}
+
+/* ============ MEMBER: local activity tracking ============ */
+function startMember(name){
+  document.getElementById("m-name").textContent=name;
+  document.getElementById("m-idle").textContent=BREAK_THRESHOLD/60;
+  go("member");
+  loadOrInitState();
+  ["mousemove","mousedown","keydown","scroll","wheel","touchstart","click"]
+    .forEach(ev=>window.addEventListener(ev, onInput, {passive:true}));
+  tickTimer=setInterval(tick,1000);
+  syncTimer=setInterval(syncNow, SYNC_INTERVAL*1000);
+  syncNow(); renderMember();
+}
+function loadOrInitState(){
+  const today=dateStr();
+  let saved=null;
+  try{ saved=JSON.parse(localStorage.getItem("tt_state")||"null"); }catch(e){}
+  if(saved && saved.date===today){ S=saved; S.lastInput=Date.now(); }
+  else { S={date:today, login:Date.now(), lastInput:Date.now(), onBreak:false, breakStart:null, breaks:[]}; }
+  saveState();
+}
+function onInput(){
+  const now=Date.now();
+  if(S.onBreak){                       // a break just ended
+    S.breaks.push({start:S.breakStart, end:now});
+    S.onBreak=false; S.breakStart=null;
+    saveState(); syncNow();
+  }
+  S.lastInput=now;
+}
+function tick(){
+  const now=Date.now();
+  const idle=(now-S.lastInput)/1000;
+  if(!S.onBreak && idle>=BREAK_THRESHOLD){   // idle 5+ min => On Break
+    S.onBreak=true; S.breakStart=S.lastInput; // break really began when input stopped
+    saveState(); syncNow();
+  }
+  renderMember();
+}
+function computeStats(){
+  const now=Date.now();
+  let breakMs=0;
+  S.breaks.forEach(b=> breakMs += (b.end-b.start));
+  if(S.onBreak && S.breakStart) breakMs += (now-S.breakStart);
+  const sessionMs=now-S.login;
+  const workingMs=Math.max(0, sessionMs-breakMs);
+  const parts=S.breaks.map(b=>hm(b.start)+"–"+hm(b.end));
+  if(S.onBreak) parts.push(hm(S.breakStart)+"–…");
+  return {
+    workingSeconds:Math.round(workingMs/1000),
+    breakSeconds:Math.round(breakMs/1000),
+    breakCount:S.breaks.length + (S.onBreak?1:0),
+    breaks:parts.join("; "),
+    status:S.onBreak?"on_break":"working"
+  };
+}
+async function syncNow(){
+  if(!S) return;
+  const st=computeStats();
+  try{
+    await call("sync",{token:getToken(), date:S.date, login:timeStr(S.login),
+      status:st.status, workingSeconds:st.workingSeconds, breakSeconds:st.breakSeconds,
+      breaks:st.breaks, lastSeen:dtStr(Date.now())});
+  }catch(e){}
+}
+function renderMember(){
+  if(!S) return;
+  const st=computeStats();
+  document.getElementById("m-work").textContent=fmt(st.workingSeconds);
+  document.getElementById("m-break").textContent=fmt(st.breakSeconds);
+  document.getElementById("m-breaks").textContent=st.breakCount;
+  document.getElementById("m-login").textContent=hm(S.login);
+  setBadge("m-badge","m-status",st.status);
+}
+function setBadge(badgeId,textId,status){
+  const b=document.getElementById(badgeId), t=document.getElementById(textId);
+  b.className="badge "+(status==="working"?"working":status==="on_break"?"onbreak":"offline");
+  t.textContent = status==="working"?"Working":status==="on_break"?"On Break":"Offline";
+}
+
+/* ============ ADMIN ============ */
+async function createUser(){
+  const u=document.getElementById("nu-user").value.trim();
+  const p=document.getElementById("nu-pass").value;
+  const team=document.getElementById("nu-team").value.trim();
+  const r=await call("createUser",{token:getToken(), username:u, password:p, team});
+  const err=document.getElementById("nu-err");
+  if(r.error){ err.style.color="var(--bad)"; err.textContent=r.error; return; }
+  err.style.color="var(--good)"; err.textContent="Added "+u+".";
+  document.getElementById("nu-user").value="";
+  document.getElementById("nu-pass").value="";
+  document.getElementById("nu-team").value="";
+  refreshReport();
+}
+async function refreshReport(){
+  const r=await call("report",{token:getToken(), date:dateStr()});
+  if(r.error) return;
+  const body=document.getElementById("a-body"); body.innerHTML="";
+  document.getElementById("a-empty").textContent = r.members.length ? "" : "No activity yet today.";
+  const now=Date.now();
+  r.members.forEach(m=>{
+    let status=m.status;
+    const seen = m.lastSeen ? new Date(String(m.lastSeen).replace(" ","T")).getTime() : 0;
+    if(!seen || now-seen > 90000) status="offline";
+    const st = status==="working"?'<span class="badge working"><span class="dot"></span>Working</span>'
+      : status==="on_break"?'<span class="badge onbreak"><span class="dot"></span>On Break</span>'
+      : '<span class="badge offline"><span class="dot"></span>Offline</span>';
+    const brkTxt = m.breaks ? String(m.breaks) : "";
+    const brkCount = brkTxt ? brkTxt.split(";").filter(x=>x.trim()).length : 0;
+    const breaks = brkCount
+      ? '<details><summary>'+brkCount+' break(s)</summary><div class="small" style="margin-top:6px">'+brkTxt+'</div></details>'
+      : '<span class="muted">0</span>';
+    const started = m.workStarted ? String(m.workStarted).slice(0,5) : "—";
+    const ended = m.workEnded ? String(m.workEnded).slice(0,5) : "—";
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td><b>${m.username}</b></td><td class="muted">${m.team||"—"}</td>
+      <td>${st}</td><td>${started}</td><td>${ended}</td>
+      <td>${m.workedHuman||"—"}</td><td>${m.breakHuman||"—"}</td><td>${breaks}</td>`;
+    body.appendChild(tr);
+  });
+  document.getElementById("a-updated").textContent="Updated "+new Date().toLocaleTimeString();
+}
+
+/* ============ BOOT ============ */
+(async function(){
+  if(!SCRIPT_URL || SCRIPT_URL.indexOf("PASTE_")>=0){ go("config"); return; }
+  const tok=getToken();
+  if(tok){
+    try{
+      const r=await call("me",{token:tok});
+      if(r.loggedIn){ enter(r.role, r.username); return; }
+    }catch(e){}
+    clearToken();
+  }
+  go("landing");
+})();
+</script>
+</body>
+</html>
