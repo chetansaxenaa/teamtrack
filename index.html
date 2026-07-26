@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Teamtrack</title>
-<link rel="icon" type="image/svg+xml" href="teamtrack-icon.svg">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%235b93ff'/><stop offset='1' stop-color='%233f6fe0'/></linearGradient></defs><rect x='2' y='2' width='60' height='60' rx='15' fill='url(%23g)'/><path d='M12 40 H23 L28 31 L33 47 L38 40 H52' fill='none' stroke='%23fff' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/><circle cx='21' cy='22' r='4.3' fill='%2337c26b'/><circle cx='32' cy='22' r='4.3' fill='%23fff'/><circle cx='43' cy='22' r='4.3' fill='%23f0a020'/></svg>">
 <style>
   :root{
     --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
@@ -63,7 +63,13 @@
 
   <!-- CONFIG WARNING -->
   <div id="view-config" class="hide">
-    <img src="teamtrack-logo.svg" alt="Teamtrack" style="height:52px">
+    <svg height="52" viewBox="0 0 272 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Teamtrack">
+      <defs><linearGradient id="ttA" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5b93ff"/><stop offset="1" stop-color="#3f6fe0"/></linearGradient></defs>
+      <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#ttA)"/>
+      <path d="M12 40 H23 L28 31 L33 47 L38 40 H52" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.96"/>
+      <circle cx="21" cy="22" r="4.3" fill="#37c26b"/><circle cx="32" cy="22" r="4.3" fill="#fff"/><circle cx="43" cy="22" r="4.3" fill="#f0a020"/>
+      <text x="78" y="41" font-family="system-ui,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="30" font-weight="700" letter-spacing="-0.6"><tspan fill="#e7e9ee">Team</tspan><tspan fill="#4f8cff">track</tspan></text>
+    </svg>
     <div class="warnbox">
       Almost there — open <code>index.html</code> and set <code>SCRIPT_URL</code>
       (near the top of the script) to your Google Apps Script Web app URL, then reload.
@@ -72,7 +78,13 @@
 
   <!-- LANDING -->
   <div id="view-landing" class="hide">
-    <img src="teamtrack-logo.svg" alt="Teamtrack" style="height:52px">
+    <svg height="52" viewBox="0 0 272 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Teamtrack">
+      <defs><linearGradient id="ttB" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5b93ff"/><stop offset="1" stop-color="#3f6fe0"/></linearGradient></defs>
+      <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#ttB)"/>
+      <path d="M12 40 H23 L28 31 L33 47 L38 40 H52" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.96"/>
+      <circle cx="21" cy="22" r="4.3" fill="#37c26b"/><circle cx="32" cy="22" r="4.3" fill="#fff"/><circle cx="43" cy="22" r="4.3" fill="#f0a020"/>
+      <text x="78" y="41" font-family="system-ui,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="30" font-weight="700" letter-spacing="-0.6"><tspan fill="#e7e9ee">Team</tspan><tspan fill="#4f8cff">track</tspan></text>
+    </svg>
     <div class="sub" style="margin-top:8px">Sign in to start tracking, or manage your team.</div>
     <div class="choice">
       <button onclick="showLogin('member')">👥 Team Member<br><span class="small">Log in &amp; start working</span></button>
