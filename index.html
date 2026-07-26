@@ -167,8 +167,8 @@
       <div class="toolbar"><h1 style="font-size:17px">Team status</h1><span class="small" id="a-updated"></span></div>
       <table>
         <thead><tr>
-          <th>Person</th><th>Team</th><th>Status</th><th>Started</th><th>Ended</th>
-          <th>Working</th><th>Break</th><th>Breaks (5min+ away)</th>
+          <th>Person</th><th>Team</th><th>Status</th><th>Login</th><th>Logout</th>
+          <th>Total working</th><th>Total non-working</th>
         </tr></thead>
         <tbody id="a-body"></tbody>
       </table>
@@ -366,23 +366,16 @@ async function refreshReport(){
   document.getElementById("a-empty").textContent = r.members.length ? "" : "No activity yet today.";
   const now=Date.now();
   r.members.forEach(m=>{
-    let status=m.status;
-    const seen = m.lastSeen ? new Date(String(m.lastSeen).replace(" ","T")).getTime() : 0;
-    if(!seen || now-seen > 90000) status="offline";
-    const st = status==="working"?'<span class="badge working"><span class="dot"></span>Working</span>'
-      : status==="on_break"?'<span class="badge onbreak"><span class="dot"></span>On Break</span>'
-      : '<span class="badge offline"><span class="dot"></span>Offline</span>';
-    const brkTxt = m.breaks ? String(m.breaks) : "";
-    const brkCount = brkTxt ? brkTxt.split(";").filter(x=>x.trim()).length : 0;
-    const breaks = brkCount
-      ? '<details><summary>'+brkCount+' break(s)</summary><div class="small" style="margin-top:6px">'+brkTxt+'</div></details>'
-      : '<span class="muted">0</span>';
-    const started = m.workStarted ? String(m.workStarted).slice(0,5) : "—";
-    const ended = m.workEnded ? String(m.workEnded).slice(0,5) : "—";
+    const done = m.logout && String(m.logout).trim();
+    const st = done
+      ? '<span class="badge offline"><span class="dot"></span>Done</span>'
+      : '<span class="badge working"><span class="dot"></span>Working</span>';
+    const login = m.login ? String(m.login).slice(0,5) : "—";
+    const logout = done ? String(m.logout).slice(0,5) : "—";
     const tr=document.createElement("tr");
     tr.innerHTML=`<td><b>${m.username}</b></td><td class="muted">${m.team||"—"}</td>
-      <td>${st}</td><td>${started}</td><td>${ended}</td>
-      <td>${m.workedHuman||"—"}</td><td>${m.breakHuman||"—"}</td><td>${breaks}</td>`;
+      <td>${st}</td><td>${login}</td><td>${logout}</td>
+      <td>${m.working||"—"}</td><td>${m.nonworking||"—"}</td>`;
     body.appendChild(tr);
   });
   document.getElementById("a-updated").textContent="Updated "+new Date().toLocaleTimeString();
