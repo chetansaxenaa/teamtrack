@@ -71,7 +71,7 @@
       <text x="78" y="41" font-family="system-ui,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="30" font-weight="700" letter-spacing="-0.6"><tspan fill="#e7e9ee">Team</tspan><tspan fill="#4f8cff">track</tspan></text>
     </svg>
     <div class="warnbox">
-      Almost there — open <code>index.html</code> and set <code>https://script.google.com/macros/s/AKfycbzoMu9fdzhYELFNwWM4lIffo65wiC1osehKxwjroMqp1EAapyilOKVrZYUidkPvEzhJ1w/exec</code>
+      Almost there — open <code>index.html</code> and set <code>SCRIPT_URL</code>
       (near the top of the script) to your Google Apps Script Web app URL, then reload.
     </div>
   </div>
@@ -200,7 +200,7 @@
 
 <script>
 /* ===== SET THIS to your Apps Script Web app URL (ends in /exec) ===== */
-const SCRIPT_URL = "PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzoMu9fdzhYELFNwWM4lIffo65wiC1osehKxwjroMqp1EAapyilOKVrZYUidkPvEzhJ1w/exec";
 
 let BREAK_THRESHOLD = 5 * 60;    // seconds; overridden by the admin setting at login
 const SYNC_INTERVAL   = 30;      // seconds between saves to the sheet
