@@ -154,6 +154,22 @@
       <button class="btn ghost" onclick="doLogout()">Log out</button>
     </div>
     <div class="card">
+      <h1 style="font-size:17px">Break setting</h1>
+      <div class="sub" style="margin-bottom:10px">Start counting non-working time after this many minutes with no activity.</div>
+      <div style="display:flex;gap:14px;align-items:end">
+        <div><label>Break starts after</label>
+          <select id="set-break" style="width:160px;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font-size:15px">
+            <option value="1">1 minute</option><option value="2">2 minutes</option>
+            <option value="3">3 minutes</option><option value="4">4 minutes</option>
+            <option value="5">5 minutes</option>
+          </select>
+        </div>
+        <button class="btn" onclick="saveSettings()">Save</button>
+      </div>
+      <div class="err" id="set-err"></div>
+    </div>
+
+    <div class="card">
       <h1 style="font-size:17px">Add a team member</h1>
       <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:end">
         <div style="flex:1;min-width:150px"><label>Person ID</label><input id="nu-user"></div>
@@ -184,9 +200,9 @@
 
 <script>
 /* ===== SET THIS to your Apps Script Web app URL (ends in /exec) ===== */
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzoMu9fdzhYELFNwWM4lIffo65wiC1osehKxwjroMqp1EAapyilOKVrZYUidkPvEzhJ1w/exec";
+const SCRIPT_URL = "PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE";
 
-const BREAK_THRESHOLD = 5 * 60;  // seconds away before it counts as a break (5 min)
+let BREAK_THRESHOLD = 5 * 60;    // seconds; overridden by the admin setting at login
 const SYNC_INTERVAL   = 30;      // seconds between saves to the sheet
 
 let S = null;                // member tracking state
@@ -263,12 +279,13 @@ function stopTimers(){ [tickTimer,syncTimer,adminTimer].forEach(t=>clearInterval
 /* ---- enter a dashboard ---- */
 function enter(role, name){
   if(role==="member") startMember(name);
-  else { go("admin"); refreshReport(); adminTimer=setInterval(refreshReport, 5000); }
+  else { go("admin"); loadSettings(); refreshReport(); adminTimer=setInterval(refreshReport, 5000); }
 }
 
 /* ============ MEMBER: local activity tracking ============ */
 function startMember(name){
   document.getElementById("m-name").textContent=name;
+  call("getSettings").then(r=>{ if(r&&r.breakMinutes){ BREAK_THRESHOLD=r.breakMinutes*60; document.getElementById("m-idle").textContent=r.breakMinutes; } }).catch(()=>{});
   document.getElementById("m-idle").textContent=BREAK_THRESHOLD/60;
   go("member");
   loadOrInitState();
@@ -346,6 +363,17 @@ function setBadge(badgeId,textId,status){
 }
 
 /* ============ ADMIN ============ */
+async function loadSettings(){
+  const r = await call("getSettings");
+  if(r && r.breakMinutes){ const s=document.getElementById("set-break"); if(s) s.value=String(r.breakMinutes); }
+}
+async function saveSettings(){
+  const m = document.getElementById("set-break").value;
+  const r = await call("setSettings", {token:getToken(), breakMinutes:Number(m)});
+  const err=document.getElementById("set-err");
+  if(r.error){ err.style.color="var(--bad)"; err.textContent=r.error; return; }
+  err.style.color="var(--good)"; err.textContent="Saved. Break now starts after "+r.breakMinutes+" min.";
+}
 async function createUser(){
   const u=document.getElementById("nu-user").value.trim();
   const p=document.getElementById("nu-pass").value;
