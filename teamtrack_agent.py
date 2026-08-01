@@ -24,16 +24,25 @@ import subprocess
 import urllib.request
 import tkinter as tk
 from tkinter import font as tkfont
+from tkinter import messagebox
 
 # ----------------------------- settings -----------------------------------
-BREAK_THRESHOLD = 5 * 60
-LOOP_INTERVAL   = 5
-SYNC_INTERVAL   = 30
+BREAK_THRESHOLD = 5 * 60   # default; overridden by the admin setting fetched at login
+LOOP_INTERVAL   = 2        # check activity every 2 seconds
+SYNC_INTERVAL   = 300      # save to the sheet only every 5 min (plus login & logout)
 DELTA_CLAMP     = 120
+RESUME_WINDOW   = 6 * 3600 # resume an interrupted shift only if reopened within 6 hours
+
+# --- anti-trick (nudge) detection ---
+# A lone nudge (single click / tiny move) must NOT count as resuming work.
+# Real work = at least MIN_SUSTAINED active samples within the last WINDOW_SAMPLES.
+WINDOW_SAMPLES  = 10       # ~20 seconds of history (10 x 2s)
+MIN_SUSTAINED   = 3        # need >=3 active samples in that window to count as "really working"
+POPUP_COOLDOWN  = 120      # show the warning popup at most once every 2 minutes
 
 # Admin: paste your Apps Script /exec URL here BEFORE building the app, so the
 # team only enters ID + password. Leave "" to be asked once.
-EMBEDDED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzoMu9fdzhYELFNwWM4lIffo65wiC1osehKxwjroMqp1EAapyilOKVrZYUidkPvEzhJ1w/exec"
+EMBEDDED_SCRIPT_URL = ""
 
 HOME        = os.path.expanduser("~")
 CONFIG_PATH = os.path.join(HOME, ".teamtrack_agent.json")
@@ -123,6 +132,18 @@ def do_login(url, username, password):
     return None, (r.get("error") or "Login failed")
 
 
+def fetch_break_threshold(url):
+    """Read the admin-set break threshold (minutes) from the backend. Default 5."""
+    try:
+        r = call(url, {"action": "getSettings"})
+        m = int(r.get("breakMinutes"))
+        if 1 <= m <= 5:
+            return m * 60
+    except Exception:
+        pass
+    return 5 * 60
+
+
 # ----------------------------- state / config -----------------------------
 def load_saved_cfg():
     if os.path.exists(CONFIG_PATH):
@@ -145,23 +166,34 @@ def save_cfg(cfg):
 
 def fresh_state(now):
     return {"date": date_str(now), "login": now, "work_secs": 0.0,
-            "break_secs": 0.0, "on_break": False, "break_start": None, "breaks": []}
+            "break_secs": 0.0, "on_break": False, "break_start": None, "breaks": [],
+            "open": True, "last_save": now}
 
 
-def load_state(now):
+def load_saved_state():
     if os.path.exists(STATE_PATH):
         try:
             with open(STATE_PATH) as f:
-                st = json.load(f)
-            if st.get("date") == date_str(now):
-                return st
+                return json.load(f)
         except Exception:
             pass
+    return None
+
+
+def start_or_resume(now):
+    """Resume a shift only if it was left OPEN recently (accidental close / crash).
+    A cleanly logged-out shift, or an old one, starts fresh -- so a night shift that
+    ended after midnight never carries over into the next day's login."""
+    saved = load_saved_state()
+    if saved and saved.get("open") and (now - saved.get("last_save", 0) < RESUME_WINDOW):
+        saved["open"] = True
+        return saved
     return fresh_state(now)
 
 
 def save_state(st):
     try:
+        st["last_save"] = time.time()
         with open(STATE_PATH, "w") as f:
             json.dump(st, f)
     except Exception:
@@ -178,10 +210,8 @@ def breaks_text(st):
 def send_sync(url, token, st, username, status_override=None, out=None):
     payload = {"action": "sync", "token": token,
                "date": st["date"], "login": time_str(st["login"]),
-               "status": status_override or ("on_break" if st["on_break"] else "working"),
                "workingSeconds": int(round(st["work_secs"])),
-               "breakSeconds": int(round(st["break_secs"])),
-               "breaks": breaks_text(st), "lastSeen": dt_str(time.time())}
+               "breakSeconds": int(round(st["break_secs"]))}
     if out:
         payload["out"] = out
     r = call(url, payload)
@@ -192,30 +222,46 @@ def send_sync(url, token, st, username, status_override=None, out=None):
 
 
 # ----------------------------- tracking loop ------------------------------
-def run_tracking(url, token, st, username, on_update, stop_event):
+def run_tracking(url, token, st, username, on_update, stop_event,
+                 threshold=BREAK_THRESHOLD, on_popup=None):
+    from collections import deque
     last_loop = time.time(); last_sync = 0.0
+    window = deque(maxlen=WINDOW_SAMPLES)      # recent active/idle samples
+    last_real_active = time.time()             # last time of SUSTAINED (real) activity
+    popup_until = 0.0
+
     while not stop_event.is_set():
         now = time.time()
         delta = min(DELTA_CLAMP, max(0.0, now - last_loop)); last_loop = now
 
-        if st["date"] != date_str(now):
-            try: send_sync(url, token, st, username, status_override="offline")
-            except Exception: pass
-            st.clear(); st.update(fresh_state(now))
+        # NOTE: no midnight rollover -- a shift keeps its login date until logout,
+        # so night shifts (e.g. 8pm-1am) stay on ONE row and never carry over.
 
-        idle = idle_seconds()
-        if idle < BREAK_THRESHOLD:
+        raw_idle = idle_seconds()
+        active_now = raw_idle < (LOOP_INTERVAL + 1)     # any input in the last sample?
+        window.append(1 if active_now else 0)
+        sustained = sum(window) >= MIN_SUSTAINED        # real work, not a lone nudge
+        if sustained:
+            last_real_active = now
+
+        eff_idle = now - last_real_active               # idle that ignores nudges
+
+        if eff_idle < threshold:
             st["work_secs"] += delta
             if st["on_break"]:
-                st["breaks"].append([st["break_start"], now - idle])
+                st["breaks"].append([st["break_start"], now])
                 st["on_break"] = False; st["break_start"] = None
         else:
             if not st["on_break"]:
-                st["on_break"] = True; st["break_start"] = now - idle
-                st["work_secs"] = max(0.0, st["work_secs"] - BREAK_THRESHOLD)
-                st["break_secs"] += BREAK_THRESHOLD
+                st["on_break"] = True; st["break_start"] = last_real_active
+                st["work_secs"] = max(0.0, st["work_secs"] - threshold)
+                st["break_secs"] += threshold
             else:
                 st["break_secs"] += delta
+            # trick detection: they're on break but just nudged to fake activity
+            if active_now and not sustained and on_popup and now >= popup_until:
+                on_popup()
+                popup_until = now + POPUP_COOLDOWN
 
         on_update("on_break" if st["on_break"] else "working")
 
@@ -335,23 +381,30 @@ class App:
             self.login_err.config(text=err); return
         self.login_err.config(text="")
         self.url, self.token, self.username = url, token, username
+        self.threshold = fetch_break_threshold(url)   # admin-set break minutes
         save_cfg({"url": url, "username": username, "password": password})
         self._start_session()
         self.show_status()
 
     def _start_session(self):
         now = time.time()
-        self.session = load_state(now)          # resume today's totals if any
+        self.session = start_or_resume(now)     # resume only a recently-interrupted shift
         self.status = "on_break" if self.session.get("on_break") else "working"
         self.who.config(text="Logged in as " + self.username)
         self.started_lbl.config(text="Started: " + hm(self.session["login"]))
+        self._popup_pending = False
         self.stop_event = threading.Event()
         self.thread = threading.Thread(
             target=run_tracking,
             args=(self.url, self.token, self.session, self.username, self._on_update, self.stop_event),
+            kwargs={"threshold": getattr(self, "threshold", BREAK_THRESHOLD),
+                    "on_popup": self._flag_popup},
             daemon=True)
         self.thread.start()
         self._tick_ui()
+
+    def _flag_popup(self):
+        self._popup_pending = True               # set by worker thread; UI shows it
 
     def _on_update(self, status):
         self.status = status                    # set by worker thread; UI polls it
@@ -359,6 +412,14 @@ class App:
     def _tick_ui(self):
         if self.session is None:
             return
+        if getattr(self, "_popup_pending", False):
+            self._popup_pending = False
+            messagebox.showwarning(
+                "Teamtrack",
+                "You appear to be away from your work.\n\n"
+                "Nudging the mouse or tapping a key to keep the timer active does not "
+                "count as working \u2014 this time is being recorded as a break.\n\n"
+                "Please resume actual work.")
         st = self.session
         self.work_lbl.config(text="Working today: " + fmt(st["work_secs"]))
         self.break_lbl.config(text="Break today: " + fmt(st["break_secs"]))
@@ -368,32 +429,38 @@ class App:
             self._draw_dot(GOOD); self.badge.config(text="Working", fg=GOOD)
         self.root.after(1000, self._tick_ui)
 
-    def _end_session(self):
-        if self.session is None:
-            return
+    def _stop_thread(self):
         if self.stop_event:
             self.stop_event.set()
         if self.thread:
             self.thread.join(timeout=2)
-        try:
-            send_sync(self.url, self.token, self.session, self.username,
-                      status_override="offline", out=time_str(time.time()))
-        except Exception:
-            pass
-        save_state(self.session)
-        self.session = None
-        self.stop_event = None
-        self.thread = None
 
     def on_logout(self):
-        self._end_session()
+        if self.session:
+            self._stop_thread()
+            self.session["open"] = False        # shift is finished -> won't resume next login
+            try:
+                send_sync(self.url, self.token, self.session, self.username,
+                          out=time_str(time.time()))
+            except Exception:
+                pass
+            save_state(self.session)
+        self.session = None; self.stop_event = None; self.thread = None
         self.pass_entry.delete(0, "end")
         self.pass_entry.insert(0, self.cfg.get("password", ""))
         self.login_err.config(text="Logged out. Work time saved.")
         self.show_login()
 
     def on_close(self):
-        self._end_session()                     # closing the window ends the session too
+        # closing the window is NOT a logout -- keep the shift open so a re-login
+        # within a few hours resumes it; just checkpoint the totals first.
+        if self.session:
+            self._stop_thread()
+            try:
+                send_sync(self.url, self.token, self.session, self.username)
+            except Exception:
+                pass
+            save_state(self.session)
         self.root.destroy()
 
 
