@@ -36,6 +36,7 @@ jobs:
       - name: Build macOS app
         if: runner.os == 'macOS'
         run: |
+          pip install pyobjc-framework-Quartz
           pyinstaller --onefile --windowed --name TeamtrackAgent teamtrack_agent.py
           cd dist && ditto -c -k --keepParent TeamtrackAgent.app TeamtrackAgent-macOS.zip
 
