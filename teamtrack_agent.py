@@ -17,6 +17,7 @@ and it saves the exact login and logout times.
 import json
 import os
 import re
+import sys
 import time
 import threading
 import platform
@@ -39,10 +40,11 @@ RESUME_WINDOW   = 6 * 3600 # resume an interrupted shift only if reopened within
 WINDOW_SAMPLES  = 10       # ~20 seconds of history (10 x 2s)
 MIN_SUSTAINED   = 3        # need >=3 active samples in that window to count as "really working"
 POPUP_COOLDOWN  = 120      # show the warning popup at most once every 2 minutes
+STUCK_SECONDS   = 25       # same key(s) held + mouse not moving this long = fake (weight on key)
 
 # Admin: paste your Apps Script /exec URL here BEFORE building the app, so the
 # team only enters ID + password. Leave "" to be asked once.
-EMBEDDED_SCRIPT_URL = ""
+EMBEDDED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxWVsZsix732bMqeR5Cs9bjVZIAPFxn8fjBU95avlHD7DmNulZRPR0igPT8FIrUo1tr6A/exec"
 
 HOME        = os.path.expanduser("~")
 CONFIG_PATH = os.path.join(HOME, ".teamtrack_agent.json")
@@ -92,6 +94,127 @@ def _idle_linux():
         return int(subprocess.check_output(["xprintidle"], stderr=subprocess.DEVNULL).strip()) / 1000.0
     except Exception:
         return 0.0
+
+
+# ------------------- stuck-key / frozen-mouse detection -------------------
+# A weight on a key sends constant input, so idle time stays ~0 and it LOOKS
+# like work. But a human never holds the exact same key(s) with the mouse
+# perfectly still for long. So we read which keys are down + the cursor
+# position; if that "fingerprint" doesn't change for STUCK_SECONDS, it's fake.
+
+def input_fingerprint():
+    """Return (held_keys_tuple, mouse_xy) for this instant, or None if unavailable."""
+    s = platform.system()
+    if s == "Windows":
+        return _fingerprint_windows()
+    if s == "Darwin":
+        return _fingerprint_mac()
+    return None
+
+
+def _fingerprint_windows():
+    try:
+        import ctypes
+        u = ctypes.windll.user32
+        held = tuple(vk for vk in range(8, 256) if u.GetAsyncKeyState(vk) & 0x8000)
+
+        class PT(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+        p = PT()
+        u.GetCursorPos(ctypes.byref(p))
+        return (held, (p.x, p.y))
+    except Exception:
+        return None
+
+
+def _fingerprint_mac():
+    # mouse position via Quartz if available; key state needs the extra module.
+    try:
+        import Quartz  # type: ignore
+        loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
+        mouse = (int(loc.x), int(loc.y))
+        held = []
+        for kc in range(0, 128):
+            if Quartz.CGEventSourceKeyState(Quartz.kCGEventSourceStateHIDSystemState, kc):
+                held.append(kc)
+        return (tuple(held), mouse)
+    except Exception:
+        return None
+
+
+# ------------------- active application logging ---------------------------
+# Records WHICH app is in the foreground (e.g. "Excel", "Chrome", "WhatsApp")
+# so time can be rolled up per app. Reads the app/window name only -- never the
+# screen contents, documents, messages, or what is typed.
+
+def active_app():
+    """Return a short, friendly name of the foreground app, or '' if unknown."""
+    s = platform.system()
+    try:
+        if s == "Windows":
+            return _active_app_windows()
+        if s == "Darwin":
+            return _active_app_mac()
+    except Exception:
+        pass
+    return ""
+
+
+def _active_app_windows():
+    import ctypes
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+    k = ctypes.windll.kernel32
+    hwnd = u.GetForegroundWindow()
+    if not hwnd:
+        return ""
+    pid = wintypes.DWORD()
+    u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    PROCESS_QUERY_LIMITED = 0x1000
+    h = k.OpenProcess(PROCESS_QUERY_LIMITED, False, pid.value)
+    if not h:
+        return ""
+    try:
+        buf = ctypes.create_unicode_buffer(512)
+        size = wintypes.DWORD(512)
+        # QueryFullProcessImageNameW
+        if k.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+            exe = buf.value.rsplit("\\", 1)[-1]        # e.g. EXCEL.EXE
+            return _friendly(exe)
+    finally:
+        k.CloseHandle(h)
+    return ""
+
+
+def _active_app_mac():
+    out = subprocess.check_output(
+        ["osascript", "-e",
+         'tell application "System Events" to get name of first application process whose frontmost is true'],
+        stderr=subprocess.DEVNULL).decode("utf-8", "ignore").strip()
+    return _friendly(out)
+
+
+# map common process/app names to friendly labels; otherwise clean the raw name
+_APP_NAMES = {
+    "excel": "Excel", "winword": "Word", "powerpnt": "PowerPoint", "outlook": "Outlook",
+    "chrome": "Chrome", "msedge": "Edge", "firefox": "Firefox", "brave": "Brave",
+    "safari": "Safari", "whatsapp": "WhatsApp", "telegram": "Telegram", "slack": "Slack",
+    "teams": "Teams", "ms-teams": "Teams", "zoom": "Zoom", "code": "VS Code",
+    "notepad": "Notepad", "explorer": "File Explorer", "finder": "Finder",
+    "spotify": "Spotify", "vlc": "VLC", "acrobat": "Acrobat", "acrord32": "Acrobat",
+    "googlechrome": "Chrome", "microsoft edge": "Edge", "youtube": "YouTube",
+}
+
+def _friendly(name):
+    if not name:
+        return ""
+    key = name.lower().replace(".exe", "").replace(".app", "").strip()
+    if key in _APP_NAMES:
+        return _APP_NAMES[key]
+    # Title-case a reasonable fallback, trimmed to keep the sheet tidy
+    clean = name.replace(".exe", "").replace(".app", "").strip()
+    return (clean[:24]) if clean else ""
 
 
 # ----------------------------- time helpers -------------------------------
@@ -167,7 +290,14 @@ def save_cfg(cfg):
 def fresh_state(now):
     return {"date": date_str(now), "login": now, "work_secs": 0.0,
             "break_secs": 0.0, "on_break": False, "break_start": None, "breaks": [],
-            "open": True, "last_save": now}
+            "apps": {}, "open": True, "last_save": now}
+
+
+def apps_text(st, top=6):
+    """Compact 'Excel 3h 10m, Chrome 1h, WhatsApp 20m' summary, biggest first."""
+    apps = st.get("apps") or {}
+    items = sorted(apps.items(), key=lambda kv: kv[1], reverse=True)[:top]
+    return ", ".join("%s %s" % (name, fmt(sec)) for name, sec in items if sec >= 30)
 
 
 def load_saved_state():
@@ -180,14 +310,29 @@ def load_saved_state():
     return None
 
 
+def _valid_state(st):
+    """A resumed state must have every key the loop relies on, with sane types."""
+    if not isinstance(st, dict):
+        return False
+    base = fresh_state(time.time())
+    for k, v in base.items():
+        if k not in st or not isinstance(st[k], type(v)):
+            return False
+    return True
+
+
 def start_or_resume(now):
     """Resume a shift only if it was left OPEN recently (accidental close / crash).
-    A cleanly logged-out shift, or an old one, starts fresh -- so a night shift that
-    ended after midnight never carries over into the next day's login."""
-    saved = load_saved_state()
-    if saved and saved.get("open") and (now - saved.get("last_save", 0) < RESUME_WINDOW):
-        saved["open"] = True
-        return saved
+    A cleanly logged-out shift, an old one, or a corrupt file starts fresh -- so a
+    night shift ending after midnight never carries over, and bad data never crashes."""
+    try:
+        saved = load_saved_state()
+        if (saved and _valid_state(saved) and saved.get("open")
+                and (now - saved.get("last_save", 0) < RESUME_WINDOW)):
+            saved["open"] = True
+            return saved
+    except Exception:
+        pass
     return fresh_state(now)
 
 
@@ -211,7 +356,8 @@ def send_sync(url, token, st, username, status_override=None, out=None):
     payload = {"action": "sync", "token": token,
                "date": st["date"], "login": time_str(st["login"]),
                "workingSeconds": int(round(st["work_secs"])),
-               "breakSeconds": int(round(st["break_secs"]))}
+               "breakSeconds": int(round(st["break_secs"])),
+               "apps": apps_text(st)}
     if out:
         payload["out"] = out
     r = call(url, payload)
@@ -229,46 +375,76 @@ def run_tracking(url, token, st, username, on_update, stop_event,
     window = deque(maxlen=WINDOW_SAMPLES)      # recent active/idle samples
     last_real_active = time.time()             # last time of SUSTAINED (real) activity
     popup_until = 0.0
+    last_fp = None; fp_since = time.time()     # input fingerprint + when it last changed
 
     while not stop_event.is_set():
-        now = time.time()
-        delta = min(DELTA_CLAMP, max(0.0, now - last_loop)); last_loop = now
+        try:
+            now = time.time()
+            delta = min(DELTA_CLAMP, max(0.0, now - last_loop)); last_loop = now
 
-        # NOTE: no midnight rollover -- a shift keeps its login date until logout,
-        # so night shifts (e.g. 8pm-1am) stay on ONE row and never carry over.
+            # NOTE: no midnight rollover -- a shift keeps its login date until logout,
+            # so night shifts (e.g. 8pm-1am) stay on ONE row and never carry over.
 
-        raw_idle = idle_seconds()
-        active_now = raw_idle < (LOOP_INTERVAL + 1)     # any input in the last sample?
-        window.append(1 if active_now else 0)
-        sustained = sum(window) >= MIN_SUSTAINED        # real work, not a lone nudge
-        if sustained:
-            last_real_active = now
+            try:
+                raw_idle = idle_seconds()
+            except Exception:
+                raw_idle = 0.0
+            active_now = raw_idle < (LOOP_INTERVAL + 1)   # any input in the last sample?
 
-        eff_idle = now - last_real_active               # idle that ignores nudges
+            # stuck-key / frozen-mouse check: if the held keys + cursor position have
+            # not changed at all for STUCK_SECONDS, the "input" is fake (weight on a
+            # key, cursor frozen). A real person's keys/cursor change constantly.
+            try:
+                fp = input_fingerprint()
+            except Exception:
+                fp = None
+            if fp is not None:
+                if fp != last_fp:
+                    last_fp = fp; fp_since = now
+                if fp[0] and (now - fp_since) >= STUCK_SECONDS:
+                    active_now = False           # don't let a stuck key count as activity
 
-        if eff_idle < threshold:
-            st["work_secs"] += delta
-            if st["on_break"]:
-                st["breaks"].append([st["break_start"], now])
-                st["on_break"] = False; st["break_start"] = None
-        else:
-            if not st["on_break"]:
-                st["on_break"] = True; st["break_start"] = last_real_active
-                st["work_secs"] = max(0.0, st["work_secs"] - threshold)
-                st["break_secs"] += threshold
+            window.append(1 if active_now else 0)
+            sustained = sum(window) >= MIN_SUSTAINED      # real work, not a lone nudge
+            if sustained:
+                last_real_active = now
+
+            eff_idle = now - last_real_active             # idle that ignores nudges
+
+            if eff_idle < threshold:
+                st["work_secs"] += delta
+                try:                                       # log foreground app (name only)
+                    app = active_app()
+                    if app:
+                        st["apps"][app] = st["apps"].get(app, 0.0) + delta
+                except Exception:
+                    pass
+                if st["on_break"]:
+                    st["breaks"].append([st["break_start"], now])
+                    st["on_break"] = False; st["break_start"] = None
             else:
-                st["break_secs"] += delta
-            # trick detection: they're on break but just nudged to fake activity
-            if active_now and not sustained and on_popup and now >= popup_until:
-                on_popup()
-                popup_until = now + POPUP_COOLDOWN
+                if not st["on_break"]:
+                    st["on_break"] = True; st["break_start"] = last_real_active
+                    st["work_secs"] = max(0.0, st["work_secs"] - threshold)
+                    st["break_secs"] += threshold
+                else:
+                    st["break_secs"] += delta
+                if active_now and not sustained and on_popup and now >= popup_until:
+                    on_popup()
+                    popup_until = now + POPUP_COOLDOWN
 
-        on_update("on_break" if st["on_break"] else "working")
+            try:
+                on_update("on_break" if st["on_break"] else "working")
+            except Exception:
+                pass
 
-        if now - last_sync >= SYNC_INTERVAL:
-            try: send_sync(url, token, st, username)
-            except Exception: pass
-            save_state(st); last_sync = now
+            if now - last_sync >= SYNC_INTERVAL:
+                try: send_sync(url, token, st, username)
+                except Exception: pass
+                save_state(st); last_sync = now
+        except Exception:
+            # one bad iteration must never kill tracking -- skip and keep going
+            pass
 
         time.sleep(LOOP_INTERVAL)
 
@@ -292,9 +468,12 @@ class App:
         root.resizable(False, False)
         root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        self.h1 = tkfont.Font(family="Helvetica", size=22, weight="bold")
-        self.big = tkfont.Font(family="Helvetica", size=17, weight="bold")
-        self.base = tkfont.Font(family="Helvetica", size=12)
+        try:
+            self.h1 = tkfont.Font(family="Helvetica", size=22, weight="bold")
+            self.big = tkfont.Font(family="Helvetica", size=17, weight="bold")
+            self.base = tkfont.Font(family="Helvetica", size=12)
+        except Exception:                      # some systems lack named fonts
+            self.h1 = self.big = self.base = None
 
         self._build_login()
         self._build_status()
@@ -369,22 +548,32 @@ class App:
 
     # ---- actions ----
     def on_login(self):
-        url = self.url or self.url_entry.get().strip()
-        username = self.user_entry.get().strip()
-        password = self.pass_entry.get()
-        if not (url and username and password):
-            self.login_err.config(text="Please fill in all fields."); return
-        self.login_err.config(text="Logging in...")
-        self.root.update_idletasks()
-        token, err = do_login(url, username, password)
-        if not token:
-            self.login_err.config(text=err); return
-        self.login_err.config(text="")
-        self.url, self.token, self.username = url, token, username
-        self.threshold = fetch_break_threshold(url)   # admin-set break minutes
-        save_cfg({"url": url, "username": username, "password": password})
-        self._start_session()
-        self.show_status()
+        try:
+            url = self.url or self.url_entry.get().strip()
+            username = self.user_entry.get().strip()
+            password = self.pass_entry.get()
+            if not (url and username and password):
+                self.login_err.config(text="Please fill in all fields."); return
+            self.login_err.config(text="Logging in...")
+            self.root.update_idletasks()
+            token, err = do_login(url, username, password)
+            if not token:
+                self.login_err.config(text=err or "Login failed. Try again."); return
+            self.login_err.config(text="")
+            self.url, self.token, self.username = url, token, username
+            try:
+                self.threshold = fetch_break_threshold(url)
+            except Exception:
+                self.threshold = BREAK_THRESHOLD          # fall back to default
+            save_cfg({"url": url, "username": username, "password": password})
+            self._start_session()
+            self.show_status()
+        except Exception as e:
+            # never leave the user stuck on a frozen screen
+            try:
+                self.login_err.config(text="Something went wrong. Please try again.")
+            except Exception:
+                pass
 
     def _start_session(self):
         now = time.time()
@@ -412,22 +601,25 @@ class App:
     def _tick_ui(self):
         if self.session is None:
             return
-        if getattr(self, "_popup_pending", False):
-            self._popup_pending = False
-            messagebox.showwarning(
-                "Teamtrack",
-                "You appear to be away from your work.\n\n"
-                "Nudging the mouse or tapping a key to keep the timer active does not "
-                "count as working \u2014 this time is being recorded as a break.\n\n"
-                "Please resume actual work.")
-        st = self.session
-        self.work_lbl.config(text="Working today: " + fmt(st["work_secs"]))
-        self.break_lbl.config(text="Break today: " + fmt(st["break_secs"]))
-        if self.status == "on_break":
-            self._draw_dot(WARN); self.badge.config(text="On break", fg=WARN)
-        else:
-            self._draw_dot(GOOD); self.badge.config(text="Working", fg=GOOD)
-        self.root.after(1000, self._tick_ui)
+        try:
+            if getattr(self, "_popup_pending", False):
+                self._popup_pending = False
+                messagebox.showwarning(
+                    "Teamtrack",
+                    "You appear to be away from your work.\n\n"
+                    "Nudging the mouse or tapping a key to keep the timer active does not "
+                    "count as working \u2014 this time is being recorded as a break.\n\n"
+                    "Please resume actual work.")
+            st = self.session
+            self.work_lbl.config(text="Working today: " + fmt(st["work_secs"]))
+            self.break_lbl.config(text="Break today: " + fmt(st["break_secs"]))
+            if self.status == "on_break":
+                self._draw_dot(WARN); self.badge.config(text="On break", fg=WARN)
+            else:
+                self._draw_dot(GOOD); self.badge.config(text="Working", fg=GOOD)
+        except Exception:
+            pass                               # a draw hiccup must not stop the clock
+        self.root.after(1000, self._tick_ui)   # always reschedule
 
     def _stop_thread(self):
         if self.stop_event:
@@ -465,9 +657,28 @@ class App:
 
 
 def main():
-    root = tk.Tk()
-    App(root)
-    root.mainloop()
+    try:
+        root = tk.Tk()
+    except Exception as e:
+        # no display / tkinter broken -- nothing we can show a window with
+        sys.stderr.write("Teamtrack could not start a window: %s\n" % e)
+        return
+    try:
+        App(root)
+    except Exception as e:
+        # building the UI failed -- show a plain error box instead of vanishing
+        try:
+            from tkinter import messagebox as _mb
+            _mb.showerror("Teamtrack",
+                          "Teamtrack could not start.\n\n%s\n\n"
+                          "Please close and open it again, or contact your admin." % e)
+        except Exception:
+            sys.stderr.write("Teamtrack failed to start: %s\n" % e)
+        return
+    try:
+        root.mainloop()
+    except Exception as e:
+        sys.stderr.write("Teamtrack stopped: %s\n" % e)
 
 
 if __name__ == "__main__":
