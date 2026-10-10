@@ -404,6 +404,7 @@ def run_tracking(url, token, st, username, on_update, stop_event,
         try:
             now = time.time()
             delta = min(DELTA_CLAMP, max(0.0, now - last_loop)); last_loop = now
+            stuck_now = False; held_for = 0.0; keys = ()   # defaults for this sample
 
             # NOTE: no midnight rollover -- a shift keeps its login date until logout,
             # so night shifts (e.g. 8pm-1am) stay on ONE row and never carry over.
@@ -438,12 +439,7 @@ def run_tracking(url, token, st, username, on_update, stop_event,
                 held_for = (now - held_since) if held_set else 0
                 stuck_now = bool(held_set) and held_for >= STUCK_SECONDS
                 if stuck_now:
-                    active_now = False            # key held too long -> fake
-                    last_real_active = held_since # stop the work clock from the hold start
-
-                # DIAGNOSTIC: log what we actually see (helps debug long-press)
-                _dbg("keys=%s raw_idle=%.1f held_for=%.1f stuck=%s active=%s" % (
-                    (list(keys) if keys else []), raw_idle, held_for, stuck_now, active_now))
+                    active_now = False            # key held too long -> fake (not real work)
 
                 # --- "no variety" rule: over the window, mostly key-holds with
                 #     very few real mouse moves and few different keys = fake.
@@ -462,17 +458,29 @@ def run_tracking(url, token, st, username, on_update, stop_event,
                     had_any_input = any(ks or m for _, ks, m in var_hist)
                     if (had_any_input and moves < NOVAR_MIN_MOVES
                             and len(distinct_keys) < NOVAR_MIN_KEYS):
-                        active_now = False
-                        last_real_active = var_hist[0][0]
+                        active_now = False        # input with no variety -> fake
 
             window.append(1 if active_now else 0)
             sustained = sum(window) >= MIN_SUSTAINED      # real work, not a lone nudge
             if sustained:
-                last_real_active = now
+                last_real_active = now            # only REAL activity resets the clock
 
-            eff_idle = now - last_real_active             # idle that ignores nudges
+            # A held key is a DEFINITIVE fake, so it trips the break on its own fast
+            # timer (STUCK_SECONDS) instead of waiting the full 1-5 min break threshold.
+            eff_threshold = threshold
+            if stuck_now:
+                if held_since < last_real_active:
+                    last_real_active = held_since  # count the break from when the hold began
+                eff_threshold = min(threshold, STUCK_SECONDS)
 
-            if eff_idle < threshold:
+            eff_idle = now - last_real_active             # time since last real activity
+
+            # DIAGNOSTIC: log what we actually see (helps debug long-press)
+            _dbg("keys=%s raw_idle=%.1f held_for=%.1f stuck=%s active=%s eff_idle=%.1f thr=%.0f onbreak=%s" % (
+                list(keys), raw_idle, held_for, stuck_now, active_now,
+                eff_idle, eff_threshold, st["on_break"]))
+
+            if eff_idle < eff_threshold:
                 st["work_secs"] += delta
                 try:                                       # log foreground app (name only)
                     app = active_app()
@@ -486,8 +494,8 @@ def run_tracking(url, token, st, username, on_update, stop_event,
             else:
                 if not st["on_break"]:
                     st["on_break"] = True; st["break_start"] = last_real_active
-                    st["work_secs"] = max(0.0, st["work_secs"] - threshold)
-                    st["break_secs"] += threshold
+                    st["work_secs"] = max(0.0, st["work_secs"] - eff_threshold)
+                    st["break_secs"] += eff_threshold
                 else:
                     st["break_secs"] += delta
                 if active_now and not sustained and on_popup and now >= popup_until:
