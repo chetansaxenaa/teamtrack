@@ -54,6 +54,18 @@ EMBEDDED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxWVsZsix732bMqeR
 HOME        = os.path.expanduser("~")
 CONFIG_PATH = os.path.join(HOME, ".teamtrack_agent.json")
 STATE_PATH  = os.path.join(HOME, ".teamtrack_agent_state.json")
+# diagnostic log: records what Windows reports each sample, so we can see exactly
+# what a held key looks like. File lands on the Desktop as teamtrack_debug.txt.
+DEBUG_LOG   = os.path.join(HOME, "Desktop", "teamtrack_debug.txt")
+if not os.path.isdir(os.path.dirname(DEBUG_LOG)):
+    DEBUG_LOG = os.path.join(HOME, "teamtrack_debug.txt")
+
+def _dbg(line):
+    try:
+        with open(DEBUG_LOG, "a", encoding="utf-8") as f:
+            f.write(time.strftime("%H:%M:%S") + "  " + line + "\n")
+    except Exception:
+        pass
 
 # brand colors
 BG = "#0f1115"; PANEL = "#171a21"; TEXT = "#e7e9ee"; MUTED = "#9aa3b2"
@@ -407,8 +419,11 @@ def run_tracking(url, token, st, username, on_update, stop_event,
             # key, cursor frozen). A real person's keys/cursor change constantly.
             try:
                 fp = input_fingerprint()
-            except Exception:
+            except Exception as _e:
                 fp = None
+                _dbg("fingerprint ERROR: %r" % _e)
+            if fp is None:
+                _dbg("fingerprint=None (key/mouse read unavailable)")
             if fp is not None:
                 keys, mouse = fp[0], fp[1]
 
@@ -420,9 +435,15 @@ def run_tracking(url, token, st, username, on_update, stop_event,
                     pass                          # still holding the same key(s)
                 else:
                     last_held = held_set; held_since = now
-                if held_set and (now - held_since) >= STUCK_SECONDS:
+                held_for = (now - held_since) if held_set else 0
+                stuck_now = bool(held_set) and held_for >= STUCK_SECONDS
+                if stuck_now:
                     active_now = False            # key held too long -> fake
                     last_real_active = held_since # stop the work clock from the hold start
+
+                # DIAGNOSTIC: log what we actually see (helps debug long-press)
+                _dbg("keys=%s raw_idle=%.1f held_for=%.1f stuck=%s active=%s" % (
+                    (list(keys) if keys else []), raw_idle, held_for, stuck_now, active_now))
 
                 # --- "no variety" rule: over the window, mostly key-holds with
                 #     very few real mouse moves and few different keys = fake.
