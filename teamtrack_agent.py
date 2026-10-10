@@ -40,7 +40,12 @@ RESUME_WINDOW   = 6 * 3600 # resume an interrupted shift only if reopened within
 WINDOW_SAMPLES  = 10       # ~20 seconds of history (10 x 2s)
 MIN_SUSTAINED   = 3        # need >=3 active samples in that window to count as "really working"
 POPUP_COOLDOWN  = 120      # show the warning popup at most once every 2 minutes
-STUCK_SECONDS   = 25       # same key(s) held + mouse not moving this long = fake (weight on key)
+STUCK_SECONDS   = 8        # same key(s) held + mouse not moving this long = fake (weight/long-press)
+# "no variety" rule: over NOVAR_WINDOW, if input is basically just key-holds with
+# the mouse barely moving and no different keys, it's fake even if nothing is "stuck".
+NOVAR_WINDOW    = 90       # seconds of history to judge variety over
+NOVAR_MIN_MOVES = 4        # need at least this many real mouse moves in that window
+NOVAR_MIN_KEYS  = 3        # ...or at least this many DIFFERENT keys, to count as real work
 
 # Admin: paste your Apps Script /exec URL here BEFORE building the app, so the
 # team only enters ID + password. Leave "" to be asked once.
@@ -376,6 +381,9 @@ def run_tracking(url, token, st, username, on_update, stop_event,
     last_real_active = time.time()             # last time of SUSTAINED (real) activity
     popup_until = 0.0
     last_fp = None; fp_since = time.time()     # input fingerprint + when it last changed
+    # "no variety" history: (timestamp, keys_frozenset, mouse_xy) per sample
+    var_hist = deque()
+    last_mouse = None
 
     while not stop_event.is_set():
         try:
@@ -402,7 +410,26 @@ def run_tracking(url, token, st, username, on_update, stop_event,
                 if fp != last_fp:
                     last_fp = fp; fp_since = now
                 if fp[0] and (now - fp_since) >= STUCK_SECONDS:
-                    active_now = False           # don't let a stuck key count as activity
+                    active_now = False           # held key + still mouse -> fake
+
+                # --- "no variety" rule ---
+                keys, mouse = fp[0], fp[1]
+                moved = last_mouse is not None and (
+                    abs(mouse[0] - last_mouse[0]) + abs(mouse[1] - last_mouse[1]) > 3)
+                last_mouse = mouse
+                var_hist.append((now, frozenset(keys), 1 if moved else 0))
+                while var_hist and now - var_hist[0][0] > NOVAR_WINDOW:
+                    var_hist.popleft()
+                # only judge once we have a full window of history
+                if active_now and var_hist and (now - var_hist[0][0]) >= NOVAR_WINDOW * 0.8:
+                    distinct_keys = set()
+                    for _, ks, _ in var_hist:
+                        distinct_keys |= ks
+                    moves = sum(m for _, _, m in var_hist)
+                    had_any_input = any(ks or m for _, ks, m in var_hist)
+                    if (had_any_input and moves < NOVAR_MIN_MOVES
+                            and len(distinct_keys) < NOVAR_MIN_KEYS):
+                        active_now = False       # input with no variety -> fake
 
             window.append(1 if active_now else 0)
             sustained = sum(window) >= MIN_SUSTAINED      # real work, not a lone nudge
@@ -454,7 +481,7 @@ class App:
     def __init__(self, root):
         self.root = root
         self.cfg = load_saved_cfg()
-        self.url = EMBEDDED_SCRIPT_URL or self.cfg.get("url", "")
+        self.url = EMBEDDED_SCRIPT_URL or self.cfg.get("url", "https://script.google.com/macros/s/AKfycbxWVsZsix732bMqeR5Cs9bjVZIAPFxn8fjBU95avlHD7DmNulZRPR0igPT8FIrUo1tr6A/exec")
         self.token = None
         self.username = None
         self.session = None
