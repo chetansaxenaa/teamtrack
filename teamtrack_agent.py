@@ -43,7 +43,7 @@ POPUP_COOLDOWN  = 120      # show the warning popup at most once every 2 minutes
 STUCK_SECONDS   = 8        # same key(s) held + mouse not moving this long = fake (weight/long-press)
 # "no variety" rule: over NOVAR_WINDOW, if input is basically just key-holds with
 # the mouse barely moving and no different keys, it's fake even if nothing is "stuck".
-NOVAR_WINDOW    = 90       # seconds of history to judge variety over
+NOVAR_WINDOW    = 45       # seconds of history to judge variety over
 NOVAR_MIN_MOVES = 4        # need at least this many real mouse moves in that window
 NOVAR_MIN_KEYS  = 3        # ...or at least this many DIFFERENT keys, to count as real work
 
@@ -121,7 +121,10 @@ def _fingerprint_windows():
     try:
         import ctypes
         u = ctypes.windll.user32
-        held = tuple(vk for vk in range(8, 256) if u.GetAsyncKeyState(vk) & 0x8000)
+        # 0x8000 = key is CURRENTLY down. We ignore the low 0x1 "was pressed since
+        # last call" bit, which toggles on a held key and would look like change.
+        held = tuple(vk for vk in range(8, 256)
+                     if u.GetAsyncKeyState(vk) & 0x8000)
 
         class PT(ctypes.Structure):
             _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
@@ -380,8 +383,8 @@ def run_tracking(url, token, st, username, on_update, stop_event,
     window = deque(maxlen=WINDOW_SAMPLES)      # recent active/idle samples
     last_real_active = time.time()             # last time of SUSTAINED (real) activity
     popup_until = 0.0
-    last_fp = None; fp_since = time.time()     # input fingerprint + when it last changed
-    # "no variety" history: (timestamp, keys_frozenset, mouse_xy) per sample
+    last_held = ();  held_since = time.time()  # which keys are held + since when (keys only)
+    # "no variety" history: (timestamp, keys_frozenset, moved?) per sample
     var_hist = deque()
     last_mouse = None
 
@@ -407,21 +410,30 @@ def run_tracking(url, token, st, username, on_update, stop_event,
             except Exception:
                 fp = None
             if fp is not None:
-                if fp != last_fp:
-                    last_fp = fp; fp_since = now
-                if fp[0] and (now - fp_since) >= STUCK_SECONDS:
-                    active_now = False           # held key + still mouse -> fake
-
-                # --- "no variety" rule ---
                 keys, mouse = fp[0], fp[1]
+
+                # --- stuck key: the SAME non-empty key set held, unchanged,
+                #     for STUCK_SECONDS. Mouse is ignored here, so wiggling it
+                #     does not reset the timer (that's the whole point). ---
+                held_set = frozenset(keys)
+                if held_set and held_set == last_held:
+                    pass                          # still holding the same key(s)
+                else:
+                    last_held = held_set; held_since = now
+                if held_set and (now - held_since) >= STUCK_SECONDS:
+                    active_now = False            # key held too long -> fake
+                    last_real_active = held_since # stop the work clock from the hold start
+
+                # --- "no variety" rule: over the window, mostly key-holds with
+                #     very few real mouse moves and few different keys = fake.
+                #     Catches "hold a key + wiggle the mouse a little". ---
                 moved = last_mouse is not None and (
                     abs(mouse[0] - last_mouse[0]) + abs(mouse[1] - last_mouse[1]) > 3)
                 last_mouse = mouse
-                var_hist.append((now, frozenset(keys), 1 if moved else 0))
+                var_hist.append((now, held_set, 1 if moved else 0))
                 while var_hist and now - var_hist[0][0] > NOVAR_WINDOW:
                     var_hist.popleft()
-                # only judge once we have a full window of history
-                if active_now and var_hist and (now - var_hist[0][0]) >= NOVAR_WINDOW * 0.8:
+                if active_now and var_hist and (now - var_hist[0][0]) >= NOVAR_WINDOW * 0.6:
                     distinct_keys = set()
                     for _, ks, _ in var_hist:
                         distinct_keys |= ks
@@ -429,7 +441,8 @@ def run_tracking(url, token, st, username, on_update, stop_event,
                     had_any_input = any(ks or m for _, ks, m in var_hist)
                     if (had_any_input and moves < NOVAR_MIN_MOVES
                             and len(distinct_keys) < NOVAR_MIN_KEYS):
-                        active_now = False       # input with no variety -> fake
+                        active_now = False
+                        last_real_active = var_hist[0][0]
 
             window.append(1 if active_now else 0)
             sustained = sum(window) >= MIN_SUSTAINED      # real work, not a lone nudge
